@@ -1,16 +1,102 @@
-use std::task::{Context, Poll};
-use std::io::{Read, Write, Result};
-use std::pin::Pin;
-use std::sync::Arc;
-use std::os::unix::prelude::{AsRawFd, FromRawFd, RawFd};
 use super::sync::RawPacketStream as SyncRawPacketStream;
 pub use super::sync::{Filter, FilterProgram};
-use tokio::io::unix::AsyncFd;
-use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use futures_lite::ready;
+use std::io::{self, Read, Result, Write};
+use std::os::unix::prelude::{AsRawFd, FromRawFd, RawFd};
+use std::pin::Pin;
+use std::task::{Context, Poll};
+use tokio::io::unix::AsyncFd;
+use tokio::io::Interest;
+use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 
-#[derive(Debug, Clone)]
-pub struct RawPacketStream(Arc<AsyncFd<SyncRawPacketStream>>);
+#[derive(Debug)]
+pub struct RawPacketStreamTx(AsyncFd<SyncRawPacketStream>);
+#[derive(Debug)]
+pub struct RawPacketStreamRx(AsyncFd<SyncRawPacketStream>);
+#[derive(Debug)]
+pub struct RawPacketStream(AsyncFd<SyncRawPacketStream>);
+
+impl AsyncRead for RawPacketStreamRx {
+    fn poll_read(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut ReadBuf,
+    ) -> Poll<Result<()>> {
+        loop {
+            let mut guard = ready!(self.0.poll_read_ready(cx))?;
+
+            match guard.try_io(|inner| inner.get_ref().read(buf.initialize_unfilled())) {
+                Ok(result) => {
+                    buf.advance(result?);
+                    return Poll::Ready(Ok(()));
+                }
+                Err(_would_block) => continue,
+            }
+        }
+    }
+}
+
+impl<'a> AsyncRead for &'a RawPacketStreamRx {
+    fn poll_read(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut ReadBuf,
+    ) -> Poll<Result<()>> {
+        loop {
+            let mut guard = ready!(self.0.poll_read_ready(cx))?;
+
+            match guard.try_io(|inner| inner.get_ref().read(buf.initialize_unfilled())) {
+                Ok(result) => {
+                    buf.advance(result?);
+                    return Poll::Ready(Ok(()));
+                }
+                Err(_would_block) => continue,
+            }
+        }
+    }
+}
+
+impl AsyncWrite for RawPacketStreamTx {
+    fn poll_write(self: Pin<&mut Self>, cx: &mut Context<'_>, buf: &[u8]) -> Poll<Result<usize>> {
+        loop {
+            let mut guard = ready!(self.0.poll_write_ready(cx))?;
+
+            match guard.try_io(|inner| inner.get_ref().write(buf)) {
+                Ok(result) => return Poll::Ready(result),
+                Err(_would_block) => continue,
+            }
+        }
+    }
+
+    fn poll_flush(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Result<()>> {
+        Poll::Ready(Ok(()))
+    }
+
+    fn poll_shutdown(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Result<()>> {
+        Poll::Ready(Ok(()))
+    }
+}
+
+impl<'a> AsyncWrite for &'a RawPacketStreamTx {
+    fn poll_write(self: Pin<&mut Self>, cx: &mut Context<'_>, buf: &[u8]) -> Poll<Result<usize>> {
+        loop {
+            let mut guard = ready!(self.0.poll_write_ready(cx))?;
+
+            match guard.try_io(|inner| inner.get_ref().write(buf)) {
+                Ok(result) => return Poll::Ready(result),
+                Err(_would_block) => continue,
+            }
+        }
+    }
+
+    fn poll_flush(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Result<()>> {
+        Poll::Ready(Ok(()))
+    }
+
+    fn poll_shutdown(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Result<()>> {
+        Poll::Ready(Ok(()))
+    }
+}
 
 impl RawPacketStream {
     pub fn new() -> Result<RawPacketStream> {
@@ -29,8 +115,18 @@ impl RawPacketStream {
         self.0.get_ref().set_bpf_filter_internal(filter)
     }
 
-    pub fn drain(&mut self) -> () {
+    pub fn drain(&mut self) {
         self.0.get_ref().drain_internal()
+    }
+
+    pub fn into_split(self) -> Result<(RawPacketStreamTx, RawPacketStreamRx), io::Error> {
+        // get the original sync stream
+        let sync = self.0.into_inner();
+        // make two new asyncFd one with interest to write and the other with interest to read
+        let tx = AsyncFd::with_interest(sync.clone(), tokio::io::Interest::WRITABLE)?;
+        let rx = AsyncFd::with_interest(sync.clone(), tokio::io::Interest::READABLE)?;
+
+        Ok((RawPacketStreamTx(tx), RawPacketStreamRx(rx)))
     }
 }
 
@@ -47,7 +143,7 @@ impl AsyncRead for RawPacketStream {
                 Ok(result) => {
                     buf.advance(result?);
                     return Poll::Ready(Ok(()));
-                },
+                }
                 Err(_would_block) => continue,
             }
         }
@@ -67,7 +163,7 @@ impl<'a> AsyncRead for &'a RawPacketStream {
                 Ok(result) => {
                     buf.advance(result?);
                     return Poll::Ready(Ok(()));
-                },
+                }
                 Err(_would_block) => continue,
             }
         }
@@ -75,11 +171,7 @@ impl<'a> AsyncRead for &'a RawPacketStream {
 }
 
 impl AsyncWrite for RawPacketStream {
-    fn poll_write(
-        self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-        buf: &[u8]
-    ) -> Poll<Result<usize>> {
+    fn poll_write(self: Pin<&mut Self>, cx: &mut Context<'_>, buf: &[u8]) -> Poll<Result<usize>> {
         loop {
             let mut guard = ready!(self.0.poll_write_ready(cx))?;
 
@@ -90,27 +182,17 @@ impl AsyncWrite for RawPacketStream {
         }
     }
 
-    fn poll_flush(
-        self: Pin<&mut Self>,
-        _cx: &mut Context<'_>,
-    ) -> Poll<Result<()>> {
+    fn poll_flush(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Result<()>> {
         Poll::Ready(Ok(()))
     }
 
-    fn poll_shutdown(
-        self: Pin<&mut Self>,
-        _cx: &mut Context<'_>,
-    ) -> Poll<Result<()>> {
+    fn poll_shutdown(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Result<()>> {
         Poll::Ready(Ok(()))
     }
 }
 
 impl<'a> AsyncWrite for &'a RawPacketStream {
-    fn poll_write(
-        self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-        buf: &[u8]
-    ) -> Poll<Result<usize>> {
+    fn poll_write(self: Pin<&mut Self>, cx: &mut Context<'_>, buf: &[u8]) -> Poll<Result<usize>> {
         loop {
             let mut guard = ready!(self.0.poll_write_ready(cx))?;
 
@@ -121,17 +203,11 @@ impl<'a> AsyncWrite for &'a RawPacketStream {
         }
     }
 
-    fn poll_flush(
-        self: Pin<&mut Self>,
-        _cx: &mut Context<'_>,
-    ) -> Poll<Result<()>> {
+    fn poll_flush(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Result<()>> {
         Poll::Ready(Ok(()))
     }
 
-    fn poll_shutdown(
-        self: Pin<&mut Self>,
-        _cx: &mut Context<'_>,
-    ) -> Poll<Result<()>> {
+    fn poll_shutdown(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Result<()>> {
         Poll::Ready(Ok(()))
     }
 }
@@ -139,7 +215,7 @@ impl<'a> AsyncWrite for &'a RawPacketStream {
 impl From<SyncRawPacketStream> for RawPacketStream {
     fn from(mut sync: SyncRawPacketStream) -> RawPacketStream {
         sync.set_non_blocking().expect("could not set non-blocking");
-        RawPacketStream(Arc::new(AsyncFd::new(sync).expect("oopsie whoopsie")))
+        RawPacketStream(AsyncFd::new(sync).expect("oopsie whoopsie"))
     }
 }
 
