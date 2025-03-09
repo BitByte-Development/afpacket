@@ -1,6 +1,6 @@
 use afpacket::sync::RawPacketStream;
-use std::io::Read;
 use nom::HexDisplay;
+use std::io::Read;
 
 fn main() {
     let mut ps = RawPacketStream::new().unwrap();

@@ -4,9 +4,11 @@
 use std::io::{Error, ErrorKind, Read, Result, Write};
 use std::os::unix::io::{AsRawFd, FromRawFd, IntoRawFd, RawFd};
 
-use libc::{sockaddr_ll, sockaddr_storage, socket, packet_mreq, setsockopt};
-use libc::{AF_PACKET, ETH_P_ALL, SOCK_RAW, SOL_PACKET, SOL_SOCKET, PACKET_MR_PROMISC,
-        SO_ATTACH_FILTER, PACKET_ADD_MEMBERSHIP, PACKET_DROP_MEMBERSHIP, MSG_DONTWAIT};
+use libc::{packet_mreq, setsockopt, sockaddr_ll, sockaddr_storage, socket};
+use libc::{
+    AF_PACKET, ETH_P_ALL, MSG_DONTWAIT, PACKET_ADD_MEMBERSHIP, PACKET_DROP_MEMBERSHIP,
+    PACKET_MR_PROMISC, SOCK_RAW, SOL_PACKET, SOL_SOCKET, SO_ATTACH_FILTER,
+};
 
 /// Packet sockets are used to receive or send raw packets at OSI 2 level.
 #[derive(Debug, Clone)]
@@ -102,7 +104,13 @@ impl RawPacketStream {
             mreq.mr_ifindex = idx;
             mreq.mr_type = PACKET_MR_PROMISC as u16;
 
-            let res = setsockopt(self.0, SOL_PACKET, packet_membership, (&mreq as *const packet_mreq) as *const libc::c_void, std::mem::size_of::<packet_mreq>() as u32);
+            let res = setsockopt(
+                self.0,
+                SOL_PACKET,
+                packet_membership,
+                (&mreq as *const packet_mreq) as *const libc::c_void,
+                std::mem::size_of::<packet_mreq>() as u32,
+            );
             if res == -1 {
                 return Err(Error::last_os_error());
             }
@@ -123,7 +131,13 @@ impl RawPacketStream {
         };
 
         unsafe {
-            let res = setsockopt(self.0, SOL_SOCKET, SO_ATTACH_FILTER, &program as *const _ as *const libc::c_void, std::mem::size_of::<sock_fprog>() as u32);
+            let res = setsockopt(
+                self.0,
+                SOL_SOCKET,
+                SO_ATTACH_FILTER,
+                &program as *const _ as *const libc::c_void,
+                std::mem::size_of::<sock_fprog>() as u32,
+            );
             if res == -1 {
                 return Err(Error::last_os_error());
             }
@@ -139,8 +153,17 @@ impl RawPacketStream {
     pub(crate) fn drain_internal(&self) {
         let mut buf = [0u8; 1];
         loop {
-            let rv = unsafe { libc::recv(self.0, buf.as_mut_ptr() as *mut libc::c_void, buf.len(), MSG_DONTWAIT) };
-            if rv == -1 { break; }
+            let rv = unsafe {
+                libc::recv(
+                    self.0,
+                    buf.as_mut_ptr() as *mut libc::c_void,
+                    buf.len(),
+                    MSG_DONTWAIT,
+                )
+            };
+            if rv == -1 {
+                break;
+            }
         }
     }
 
@@ -164,7 +187,7 @@ fn index_by_name(name: &str) -> Result<i32> {
         return Err(ErrorKind::InvalidInput.into());
     }
     let mut buf = [0u8; libc::IFNAMSIZ];
-        buf[..name.len()].copy_from_slice(name.as_bytes());
+    buf[..name.len()].copy_from_slice(name.as_bytes());
     let idx = unsafe { libc::if_nametoindex(buf.as_ptr() as *const libc::c_char) };
     if idx == 0 {
         return Err(Error::last_os_error());
@@ -188,7 +211,7 @@ impl Read for RawPacketStream {
     }
 }
 
-impl<'a> Read for &'a RawPacketStream {
+impl Read for &RawPacketStream {
     fn read(&mut self, buf: &mut [u8]) -> Result<usize> {
         read_fd(self.0, buf)
     }
@@ -213,7 +236,7 @@ impl Write for RawPacketStream {
     }
 }
 
-impl<'a> Write for &'a RawPacketStream {
+impl Write for &RawPacketStream {
     fn write(&mut self, buf: &[u8]) -> Result<usize> {
         write_fd(self.0, buf)
     }

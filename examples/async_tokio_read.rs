@@ -1,6 +1,6 @@
 use afpacket::tokio::RawPacketStream;
-use tokio::io::AsyncReadExt;
 use nom::HexDisplay;
+use tokio::io::AsyncReadExt;
 
 #[tokio::main]
 async fn main() {

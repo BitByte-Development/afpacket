@@ -1,12 +1,12 @@
-use std::task::{Context, Poll};
-use std::io::Result;
-use std::pin::Pin;
-use std::sync::Arc;
-use std::os::unix::prelude::{AsRawFd, FromRawFd, RawFd};
 use super::sync::RawPacketStream as SyncRawPacketStream;
 pub use super::sync::{Filter, FilterProgram};
-use futures_lite::io::{AsyncRead, AsyncWrite};
 use async_io::Async;
+use futures_lite::io::{AsyncRead, AsyncWrite};
+use std::io::Result;
+use std::os::unix::prelude::{AsRawFd, FromRawFd, RawFd};
+use std::pin::Pin;
+use std::sync::Arc;
+use std::task::{Context, Poll};
 
 #[derive(Debug, Clone)]
 pub struct RawPacketStream(Arc<Async<SyncRawPacketStream>>);
