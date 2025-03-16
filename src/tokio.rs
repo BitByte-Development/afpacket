@@ -1,18 +1,18 @@
 use super::sync::RawPacketStream as SyncRawPacketStream;
 pub use super::sync::{Filter, FilterProgram};
 use futures_lite::ready;
-use std::io::{self, Read, Result, Write};
+use std::io::{Read, Result, Write};
 use std::os::unix::prelude::{AsRawFd, FromRawFd, RawFd};
 use std::pin::Pin;
+use std::sync::Arc;
 use std::task::{Context, Poll};
 use tokio::io::unix::AsyncFd;
-use tokio::io::Interest;
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 
 #[derive(Debug)]
-pub struct RawPacketStreamTx(AsyncFd<SyncRawPacketStream>);
+pub struct RawPacketStreamTx(Arc<AsyncFd<SyncRawPacketStream>>);
 #[derive(Debug)]
-pub struct RawPacketStreamRx(AsyncFd<SyncRawPacketStream>);
+pub struct RawPacketStreamRx(Arc<AsyncFd<SyncRawPacketStream>>);
 #[derive(Debug)]
 pub struct RawPacketStream(AsyncFd<SyncRawPacketStream>);
 
@@ -119,14 +119,11 @@ impl RawPacketStream {
         self.0.get_ref().drain_internal()
     }
 
-    pub fn into_split(self) -> Result<(RawPacketStreamTx, RawPacketStreamRx), io::Error> {
+    pub fn into_split(self) -> Result<(RawPacketStreamRx, RawPacketStreamTx)> {
         // get the original sync stream
-        let sync = self.0.into_inner();
-        // make two new asyncFd one with interest to write and the other with interest to read
-        let tx = AsyncFd::with_interest(sync.clone(), tokio::io::Interest::WRITABLE)?;
-        let rx = AsyncFd::with_interest(sync.clone(), tokio::io::Interest::READABLE)?;
+        let arc = Arc::new(self.0);
 
-        Ok((RawPacketStreamTx(tx), RawPacketStreamRx(rx)))
+        Ok((RawPacketStreamRx(arc.clone()), RawPacketStreamTx(arc)))
     }
 }
 
