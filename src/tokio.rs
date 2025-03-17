@@ -119,11 +119,10 @@ impl RawPacketStream {
         self.0.get_ref().drain_internal()
     }
 
-    pub fn into_split(self) -> Result<(RawPacketStreamRx, RawPacketStreamTx)> {
+    pub fn into_split(self) -> (RawPacketStreamRx, RawPacketStreamTx) {
         // get the original sync stream
         let arc = Arc::new(self.0);
-
-        Ok((RawPacketStreamRx(arc.clone()), RawPacketStreamTx(arc)))
+        (RawPacketStreamRx(arc.clone()), RawPacketStreamTx(arc))
     }
 }
 
